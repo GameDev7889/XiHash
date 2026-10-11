@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run current .xi file",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./cmake-build-debug/XiHash \"${file}\"",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-xihash"
+    }
+  ]
+}

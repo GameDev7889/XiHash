@@ -1,0 +1,40 @@
+{
+  "publisher": "michael",
+  "name": "xihash",
+  "displayName": "XiHash",
+  "description": "Syntax highlighting and compiler diagnostics for the XiHash language",
+  "version": "0.0.2",
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:xihash"],
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "xihash",
+      "aliases": ["XiHash"],
+      "extensions": [".xi"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "xihash",
+      "scopeName": "source.xihash",
+      "path": "./syntaxes/xihash.tmLanguage.json"
+    }],
+    "configuration": {
+      "title": "XiHash",
+      "properties": {
+        "xihash.compilerPath": {
+          "type": "string",
+          "default": "XiHash",
+          "description": "Path to the XiHash compiler executable"
+        },
+        "xihash.checkOnTypeDelay": {
+          "type": "number",
+          "default": 400,
+          "minimum": 100,
+          "description": "Delay in milliseconds before checking an edited XiHash file"
+        }
+      }
+    }
+  }
+}

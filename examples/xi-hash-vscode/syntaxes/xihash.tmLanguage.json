@@ -1,0 +1,58 @@
+{
+  "scopeName": "source.xihash",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#namespaces" },
+    { "include": "#functions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.xihash", "match": "//.*$" },
+        { "name": "comment.block.xihash", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.xihash",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.xihash", "match": "\\\\[nrt\\\\\"]" }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.xihash",
+      "match": "'(\\\\.|[^'\\\\])'"
+    },
+    "numbers": {
+      "name": "constant.numeric.xihash",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    },
+    "keywords": {
+      "name": "keyword.control.xihash",
+      "match": "\\b(return|using|usingC|usingL|namespace|extern|import|type|if|else|while|new|delete|unsafe|move|const|static)\\b"
+    },
+    "types": {
+      "name": "storage.type.xihash",
+      "match": "\\b(int|uint|float|ufloat|double|udouble|string|bool|char|void)\\b"
+    },
+    "constants": {
+      "name": "constant.language.xihash",
+      "match": "\\b(SUCCESS|FAILURE|true|false|null)\\b"
+    },
+    "namespaces": {
+      "name": "entity.name.type.xihash",
+      "match": "\\bConsole\\b"
+    },
+    "functions": {
+      "name": "entity.name.function.xihash",
+      "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"
+    }
+  }
+}
