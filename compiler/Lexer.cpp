@@ -8,6 +8,7 @@ bool isIdentStart(char c) { return std::isalpha(static_cast<unsigned char>(c)) |
 bool isDigit(char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; }
 
 std::optional<TokenKind> twoCharToken(char first, char second) {
+    if (first == '-' && second == '>') return TokenKind::Arrow;
     if (second == '=') {
         switch (first) {
             case '=': return TokenKind::EqEq;

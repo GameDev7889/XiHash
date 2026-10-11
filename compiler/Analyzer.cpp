@@ -264,6 +264,12 @@ void Analyzer::analyzeMove(MoveExpr& expr) {
     if (!isLvalue(*expr.operand) || !isSafePointer(expr.operand->type)) {
         throw XiHashError(expr.pos, "move(...) requires a variable holding a safe (unique) pointer");
     }
+    if (expr.operand->kind == ExprKind::Variable) {
+        const auto& name = static_cast<VariableExpr&>(*expr.operand).name;
+        if (VariableInfo* variable = findVariable(name); variable && (variable->isConst || variable->isReadonly)) {
+            throw XiHashError(expr.pos, "Cannot move from readonly variable '" + name + "'");
+        }
+    }
     expr.type = expr.operand->type;
 }
 
@@ -337,17 +343,17 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
                 if (decl.declType.kind != Type::Struct) {
                     throw XiHashError(decl.pos, "Only struct variables may be declared without an initializer");
                 }
-                if (decl.isConst) {
+                if (decl.isConst || decl.isReadonly) {
                     throw XiHashError(decl.pos, "A const struct must have an initializer");
                 }
-                scopes.back()[decl.name] = VariableInfo{decl.declType, decl.isConst, false, {}};
+                scopes.back()[decl.name] = VariableInfo{decl.declType, decl.isConst, decl.isReadonly, false, {}};
                 break;
             }
             analyzeInitializer(decl.init, decl.declType, "declaration");
             if (decl.isConst && !decl.init->isConst) {
                 throw XiHashError(decl.init->pos, "A const initializer must be a compile-time constant expression");
             }
-            VariableInfo variable{decl.declType, decl.isConst};
+            VariableInfo variable{decl.declType, decl.isConst, decl.isReadonly};
             markStructInitialized(variable);
             scopes.back()[decl.name] = std::move(variable);
             break;
@@ -358,7 +364,9 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
                 auto& variableExpr = static_cast<VariableExpr&>(*assign.target);
                 VariableInfo* variable = findVariable(variableExpr.name);
                 if (!variable) throw XiHashError(assign.target->pos, "Unknown variable '" + variableExpr.name + "'");
-                if (variable->isConst) throw XiHashError(assign.target->pos, "Cannot assign to const variable '" + variableExpr.name + "'");
+                if (variable->isConst || variable->isReadonly) {
+                    throw XiHashError(assign.target->pos, "Cannot assign to readonly variable '" + variableExpr.name + "'");
+                }
                 assign.target->type = variable->type;
                 assign.target->isConst = false;
             } else if (assign.target->kind == ExprKind::Member) {
@@ -368,11 +376,15 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
                     throw XiHashError(assign.target->pos, "A swizzle with repeated components cannot be assigned");
                 }
                 Expr* object = member.object.get();
-                while (object->kind == ExprKind::Member) object = static_cast<MemberExpr&>(*object).object.get();
+                while (object->kind == ExprKind::Member || object->kind == ExprKind::Index) {
+                    object = object->kind == ExprKind::Member ? static_cast<MemberExpr&>(*object).object.get()
+                                                              : static_cast<IndexExpr&>(*object).array.get();
+                }
                 if (object->kind == ExprKind::Variable) {
                     const auto& name = static_cast<VariableExpr&>(*object).name;
-                    if (VariableInfo* variable = findVariable(name); variable && variable->isConst) {
-                        throw XiHashError(assign.target->pos, "Cannot modify a member of const variable '" + name + "'");
+                    if (VariableInfo* variable = findVariable(name); variable &&
+                        (variable->isConst || variable->isReadonly) && variable->type.kind != Type::Pointer) {
+                        throw XiHashError(assign.target->pos, "Cannot modify a member of readonly variable '" + name + "'");
                     }
                 }
             } else {
@@ -384,9 +396,11 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
                 }
                 if (base->kind == ExprKind::Variable) {
                     const auto& name = static_cast<VariableExpr&>(*base).name;
-                    if (VariableInfo* variable = findVariable(name); variable && variable->isConst &&
-                        (variable->type.kind == Type::Array || variable->type.kind == Type::Vector)) {
-                        throw XiHashError(assign.target->pos, "Cannot modify an element of const array '" + name + "'");
+                    if (VariableInfo* variable = findVariable(name); variable &&
+                        (variable->isConst || variable->isReadonly) &&
+                        (variable->type.kind == Type::Array || variable->type.kind == Type::Vector ||
+                         variable->type.kind == Type::Struct)) {
+                        throw XiHashError(assign.target->pos, "Cannot modify a member or element of readonly variable '" + name + "'");
                     }
                 }
             }
@@ -412,6 +426,12 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
         }
         case StmtKind::Delete: {
             auto& del = static_cast<DeleteStmt&>(stmt);
+            if (del.operand->kind == ExprKind::Variable) {
+                const auto& name = static_cast<VariableExpr&>(*del.operand).name;
+                if (VariableInfo* variable = findVariable(name); variable && (variable->isConst || variable->isReadonly)) {
+                    throw XiHashError(del.pos, "Cannot delete through readonly variable '" + name + "'");
+                }
+            }
             analyzeExpr(*del.operand);
             const Type& type = del.operand->type;
             if (isSafePointer(type)) {
@@ -522,6 +542,20 @@ void Analyzer::analyzeExpr(Expr& expr) {
         }
         case ExprKind::AddressOf: {
             auto& addressOf = static_cast<AddressOfExpr&>(expr);
+            Expr* base = addressOf.operand.get();
+            bool indexedThroughPointer = false;
+            while (base->kind == ExprKind::Member || base->kind == ExprKind::Index) {
+                if (base->kind == ExprKind::Index) indexedThroughPointer = true;
+                base = base->kind == ExprKind::Member ? static_cast<MemberExpr&>(*base).object.get()
+                                                      : static_cast<IndexExpr&>(*base).array.get();
+            }
+            if (base->kind == ExprKind::Variable) {
+                const auto& name = static_cast<VariableExpr&>(*base).name;
+                if (VariableInfo* variable = findVariable(name); variable && (variable->isConst || variable->isReadonly) &&
+                    !(indexedThroughPointer && variable->type.kind == Type::Pointer)) {
+                    throw XiHashError(expr.pos, "Cannot take a writable address of readonly variable '" + name + "'");
+                }
+            }
             analyzeExpr(*addressOf.operand);
             if (!isLvalue(*addressOf.operand)) {
                 throw XiHashError(expr.pos, "Can only take the address of a variable or a dereferenced pointer");
@@ -602,6 +636,23 @@ void Analyzer::analyzeExpr(Expr& expr) {
         }
         case ExprKind::Member: {
             analyzeMember(static_cast<MemberExpr&>(expr), false);
+            break;
+        }
+        case ExprKind::SizeOf: {
+            auto& sizeOf = static_cast<SizeOfExpr&>(expr);
+            if (sizeOf.value->kind != ExprKind::Variable) {
+                throw XiHashError(sizeOf.value->pos, "sizeOf() requires a variable name");
+            }
+            auto& variable = static_cast<VariableExpr&>(*sizeOf.value);
+            VariableInfo* info = findVariable(variable.name);
+            if (!info) {
+                throw XiHashError(variable.pos, "Unknown variable '" + variable.name + "'");
+            }
+            // sizeof inspects a variable's type and does not read its value. This intentionally
+            // works before a struct's fields have been initialized.
+            sizeOf.value->type = info->type;
+            expr.type = Type::Int;
+            expr.isConst = true;
             break;
         }
         case ExprKind::MethodCall: {
@@ -774,6 +825,31 @@ void Analyzer::analyzeBinary(BinaryExpr& expr) {
             expr.type = Type::Bool;
             expr.isConst = lhs.isConst && rhs.isConst;
             return;
+
+        case BinaryOp::In: {
+            const Type* container = &rhs.type;
+            if (container->kind == Type::Pointer &&
+                (container->pointee->kind == Type::Array || container->pointee->kind == Type::Vector)) {
+                container = container->pointee.get();
+            }
+            if (container->kind != Type::Array && container->kind != Type::Vector) {
+                fail("Operator 'in' requires an Array or Vector on the right, got " + typeName(rhs.type));
+            }
+            const Type& elementType = *container->pointee;
+            const bool comparable = isNumeric(elementType) || elementType == Type::String ||
+                                    elementType == Type::Bool || elementType == Type::Char ||
+                                    elementType.kind == Type::Pointer;
+            if (!comparable) {
+                fail("Operator 'in' cannot search an Array of " + typeName(elementType));
+            }
+            if (!isConvertible(elementType, lhs)) {
+                fail("Cannot search an Array of " + typeName(elementType) + " for " + typeName(lhs.type));
+            }
+            expr.operandType = *container;
+            expr.type = Type::Bool;
+            expr.isConst = false;
+            return;
+        }
 
         case BinaryOp::Eq:
         case BinaryOp::Ne:

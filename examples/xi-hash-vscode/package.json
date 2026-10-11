@@ -3,7 +3,7 @@
   "name": "xihash",
   "displayName": "XiHash",
   "description": "Syntax highlighting and compiler diagnostics for the XiHash language",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "main": "./extension.js",
   "activationEvents": ["onLanguage:xihash"],
   "engines": { "vscode": "^1.80.0" },

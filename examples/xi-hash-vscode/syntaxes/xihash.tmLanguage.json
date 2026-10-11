@@ -4,6 +4,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#chars" },
+    { "include": "#operators" },
     { "include": "#numbers" },
     { "include": "#keywords" },
     { "include": "#types" },
@@ -31,13 +32,17 @@
       "name": "string.quoted.single.xihash",
       "match": "'(\\\\.|[^'\\\\])'"
     },
+    "operators": {
+      "name": "keyword.operator.xihash",
+      "match": "(->|==|!=|<=|>=|&&|\\|\\||[<>])"
+    },
     "numbers": {
       "name": "constant.numeric.xihash",
       "match": "\\b\\d+(\\.\\d+)?\\b"
     },
     "keywords": {
       "name": "keyword.control.xihash",
-      "match": "\\b(return|importC|usingL|namespace|extern|import|type|if|else|while|new|delete|unsafe|move|const|static)\\b"
+      "match": "\\b(return|importC|usingL|namespace|extern|import|type|if|else|while|new|delete|unsafe|move|const|readonly|static|struct|in)\\b"
     },
     "types": {
       "name": "storage.type.xihash",

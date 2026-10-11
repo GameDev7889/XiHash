@@ -20,6 +20,7 @@ private:
     struct VariableInfo {
         Type type;
         bool isConst;
+        bool isReadonly = false;
         bool initialized = true;
         std::unordered_set<std::string> assignedFields;
     };

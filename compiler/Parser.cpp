@@ -45,7 +45,7 @@ bool isReserved(const std::string& word) {
         || word == "usingL" || word == "namespace" || word == "void" || word == "type"
         || word == "external"
         || word == "while" || word == "import" || word == "const" || word == "static" || word == "Array"
-        || word == "struct";
+        || word == "struct" || word == "in" || word == "readonly";
 }
 
 bool isHeaderPathToken(TokenKind kind) {
@@ -546,21 +546,27 @@ StmtPtr Parser::parseStatement() {
 
     bool isConst = false;
     bool isStatic = false;
-    while (isIdentifier("const") || isIdentifier("static")) {
+    bool isReadonly = false;
+    while (isIdentifier("const") || isIdentifier("static") || isIdentifier("readonly")) {
         if (isIdentifier("const")) {
             if (isConst) {
                 throw XiHashError(current().pos, "Duplicate 'const' modifier");
             }
             isConst = true;
-        } else {
+        } else if (isIdentifier("static")) {
             if (isStatic) {
                 throw XiHashError(current().pos, "Duplicate 'static' modifier");
             }
             isStatic = true;
+        } else {
+            if (isReadonly) {
+                throw XiHashError(current().pos, "Duplicate 'readonly' modifier");
+            }
+            isReadonly = true;
         }
         ++index;
     }
-    if (isConst || isStatic || startsType()) {
+    if (isConst || isStatic || isReadonly || startsType()) {
         if (!startsType()) {
             throw XiHashError(current().pos, "Expected a type after declaration modifier");
         }
@@ -571,12 +577,12 @@ StmtPtr Parser::parseStatement() {
                 throw XiHashError(current().pos, "Only struct variables may be declared without an initializer");
             }
             ++index;
-            return std::make_unique<VarDeclStmt>(pos, declType, name.text, nullptr, isConst, isStatic);
+            return std::make_unique<VarDeclStmt>(pos, declType, name.text, nullptr, isConst, isStatic, isReadonly);
         }
         expect(TokenKind::Assign, "'=' (variables must be initialized)");
         auto init = parseExpression();
         expect(TokenKind::Semicolon, "';' after declaration");
-        return std::make_unique<VarDeclStmt>(pos, declType, name.text, std::move(init), isConst, isStatic);
+        return std::make_unique<VarDeclStmt>(pos, declType, name.text, std::move(init), isConst, isStatic, isReadonly);
     }
 
     if (peekNext().kind == TokenKind::Assign) {
@@ -615,7 +621,11 @@ ExprPtr Parser::parseBinary(int level) {
         return parseUnary();
     }
     auto lhs = parseBinary(level + 1);
-    while (const auto op = binaryOpFor(current().kind, level)) {
+    while (true) {
+        const auto op = level == 3 && current().kind == TokenKind::Identifier && current().text == "in"
+            ? std::optional<BinaryOp>(BinaryOp::In)
+            : binaryOpFor(current().kind, level);
+        if (!op) break;
         const Token token = tokens[index++];
         auto rhs = parseBinary(level + 1);
         lhs = std::make_unique<BinaryExpr>(token.pos, *op, std::move(lhs), std::move(rhs));
@@ -640,7 +650,8 @@ ExprPtr Parser::parseUnary() {
 }
 
 ExprPtr Parser::parsePostfix(ExprPtr expression) {
-    while (current().kind == TokenKind::LBracket || current().kind == TokenKind::Dot) {
+    while (current().kind == TokenKind::LBracket || current().kind == TokenKind::Dot ||
+           current().kind == TokenKind::Arrow) {
         if (current().kind == TokenKind::LBracket) {
             const SourcePos pos = current().pos;
             ++index;
@@ -650,8 +661,18 @@ ExprPtr Parser::parsePostfix(ExprPtr expression) {
             continue;
         }
         const SourcePos pos = current().pos;
+        const bool isArrow = current().kind == TokenKind::Arrow;
         ++index;
         const Token member = expect(TokenKind::Identifier, "a member or method name");
+        if (isArrow) {
+            if (member.text != "sizeOf") {
+                throw XiHashError(member.pos, "The '->' operator only supports sizeOf()");
+            }
+            expect(TokenKind::LParen, "'(' after sizeOf");
+            expect(TokenKind::RParen, "')' after sizeOf");
+            expression = std::make_unique<SizeOfExpr>(pos, std::move(expression));
+            continue;
+        }
         const std::string* baseName = expression->kind == ExprKind::Variable
             ? &static_cast<VariableExpr&>(*expression).name : nullptr;
         if (current().kind == TokenKind::LParen) {

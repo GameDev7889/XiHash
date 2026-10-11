@@ -52,6 +52,7 @@ bool compare(BinaryOp op, const T& a, const T& b) {
     switch (op) {
         case BinaryOp::Eq: return a == b;
         case BinaryOp::Ne: return a != b;
+        case BinaryOp::In: return false;
         case BinaryOp::Lt: return a < b;
         case BinaryOp::Le: return a <= b;
         case BinaryOp::Gt: return a > b;
@@ -141,6 +142,9 @@ Value ConstEvaluator::evaluate(const Expr& expr) {
 }
 
 Value ConstEvaluator::evaluateBinary(const BinaryExpr& expr) {
+    if (expr.op == BinaryOp::In) {
+        throw XiHashError(expr.pos, "Membership expressions are not constant-folded");
+    }
     if (expr.op == BinaryOp::And || expr.op == BinaryOp::Or) {
         const bool left = evaluate(*expr.lhs).integer != 0;
         if (expr.op == BinaryOp::And ? !left : left) {

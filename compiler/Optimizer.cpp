@@ -108,6 +108,7 @@ bool expressionEscapesAddress(const Expr& expr, const std::string& name) {
             return expressionEscapesAddress(*index.array, name) || expressionEscapesAddress(*index.index, name);
         }
         case ExprKind::Member: return expressionEscapesAddress(*static_cast<const MemberExpr&>(expr).object, name);
+        case ExprKind::SizeOf: return expressionEscapesAddress(*static_cast<const SizeOfExpr&>(expr).value, name);
         case ExprKind::MethodCall: {
             const auto& call = static_cast<const MethodCallExpr&>(expr);
             return expressionEscapesAddress(*call.object, name) ||
@@ -226,6 +227,9 @@ void Optimizer::optimizeExpr(ExprPtr& expr) {
         }
         case ExprKind::Member:
             optimizeExpr(static_cast<MemberExpr&>(*expr).object);
+            break;
+        case ExprKind::SizeOf:
+            optimizeExpr(static_cast<SizeOfExpr&>(*expr).value);
             break;
         case ExprKind::MethodCall: {
             auto& call = static_cast<MethodCallExpr&>(*expr);

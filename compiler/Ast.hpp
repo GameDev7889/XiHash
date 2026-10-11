@@ -132,7 +132,7 @@ inline bool isPointer(const Type& type) { return type.kind == Type::Pointer; }
 inline bool isSafePointer(const Type& type) { return type.kind == Type::Pointer && !type.isUnsafe; }
 
 enum class ExprKind { IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, CharLiteral, NullLiteral, Variable, Unary, Binary,
-                      New, Deref, AddressOf, Move, Call, ArrayLiteral, Index, Member, MethodCall };
+                      New, Deref, AddressOf, Move, Call, ArrayLiteral, Index, Member, MethodCall, SizeOf };
 
 // `type` and `isConst` are filled in by the Analyzer. A constant expression is built only from
 // literals and may be implicitly converted to any compatible numeric type.
@@ -263,7 +263,12 @@ struct MethodCallExpr : Expr {
     std::string cppFunction;
 };
 
-enum class BinaryOp { Add, Sub, Mul, Div, Eq, Ne, Lt, Le, Gt, Ge, And, Or };
+struct SizeOfExpr : Expr {
+    SizeOfExpr(SourcePos pos, ExprPtr value) : Expr(ExprKind::SizeOf, pos), value(std::move(value)) {}
+    ExprPtr value;
+};
+
+enum class BinaryOp { Add, Sub, Mul, Div, Eq, Ne, In, Lt, Le, Gt, Ge, And, Or };
 
 inline const char* opSymbol(BinaryOp op) {
     switch (op) {
@@ -273,6 +278,7 @@ inline const char* opSymbol(BinaryOp op) {
         case BinaryOp::Div: return "/";
         case BinaryOp::Eq: return "==";
         case BinaryOp::Ne: return "!=";
+        case BinaryOp::In: return "in";
         case BinaryOp::Lt: return "<";
         case BinaryOp::Le: return "<=";
         case BinaryOp::Gt: return ">";
@@ -305,14 +311,16 @@ struct Stmt {
 using StmtPtr = std::unique_ptr<Stmt>;
 
 struct VarDeclStmt : Stmt {
-    VarDeclStmt(SourcePos pos, Type declType, std::string name, ExprPtr init, bool isConst, bool isStatic)
+    VarDeclStmt(SourcePos pos, Type declType, std::string name, ExprPtr init, bool isConst, bool isStatic,
+                bool isReadonly = false)
         : Stmt(StmtKind::VarDecl, pos), declType(declType), name(std::move(name)), init(std::move(init)),
-          isConst(isConst), isStatic(isStatic) {}
+          isConst(isConst), isStatic(isStatic), isReadonly(isReadonly) {}
     Type declType;
     std::string name;
     ExprPtr init;
     bool isConst;
     bool isStatic;
+    bool isReadonly;
     std::vector<ExprPtr> aggregateValues;
     std::vector<Type> aggregateTypes;
     bool aggregatePromoted = false;

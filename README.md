@@ -30,7 +30,7 @@ Command-line options:
 | `--help` | Show command usage. |
 | `--check` | Lex, parse, and type-check without generating C++ or running a program. |
 | `--emit-cpp` | Generate C++ and the XiHash runtime header without compiling or running. |
-| `--no-opt` | Disable the default constant-folding and unreachable-code optimizations. |
+| `--no-opt` | Disable constant folding, aggregate promotion, and unreachable-code optimizations. |
 | `--stats` | Print optimization counts to standard error (only when optimization is enabled). |
 | `--keep` | Keep generated files and the executable after a successful run. |
 
@@ -67,13 +67,17 @@ ownership](#pointers-and-ownership). Type aliases can be declared at the top lev
 type Count = uint;
 ```
 
-Variables must be initialized when declared. `const` variables require compile-time
-constant initializers and cannot be assigned to. `static` gives a local variable static
-storage duration; it can be combined with `const`.
+Variables must be initialized when declared, except for structs that are assigned field by
+field. `const` variables require compile-time constant initializers. `readonly` variables
+may use runtime initializers, but cannot be reassigned; arrays, vectors, and structs held by
+value also cannot be modified through their elements or fields. A readonly pointer cannot be
+reassigned, while its pointee follows the pointee's own type. `static` gives a local variable
+static storage duration; it can be combined with `const` or `readonly`.
 
 ```xi
 const int limit = 10;
 static int calls = 0;
+readonly int runtimeLimit = calls;
 const Array<int, 3> origin = [0, 0, 0];
 Array<int, 3> samples = [4, 5, 6];
 Array<float>* dynamicSamples = new Array<float>([1.0, 2.0]);
@@ -109,8 +113,10 @@ Index both forms with `[index]`.
 Expressions include literals, variable names, function calls (`name(args)` or
 `namespace.name(args)`), parentheses, unary `-` and `!`, pointer dereference `*`,
 address-of `&`, and binary operators. From lowest to highest precedence, binary operators
-are `||`, `&&`, `==`/`!=`, `<`/`<=`/`>`/`>=`, `+`/`-`, and `*`/`/`. Operators at each
-level associate left to right. Logical operators use short-circuit evaluation.
+are `||`, `&&`, `==`/`!=`, then `in` and relational comparisons (`<`/`<=`/`>`/`>=`),
+`+`/`-`, and `*`/`/`. `item in array` checks whether the array contains an equal element;
+it accepts fixed or dynamic arrays and vectors. Operators at each level associate left to
+right. Logical operators use short-circuit evaluation.
 
 Integer literals are decimal integers; floating literals require digits on both sides of
 the decimal point. String and character literals use double and single quotes. Strings
@@ -206,6 +212,11 @@ generated C++ then has the form `const TypeStruct value{1, 1.0};`. This optimiza
 when the assignments are conditional, interleaved with other statements, non-constant, or followed
 by a later write. Use `--stats` to see how many aggregates were promoted and `--no-opt` to disable
 the optimization. See [AggregateInitialization.xi](examples/AggregateInitialization.xi).
+
+Use `value->sizeOf()` to get the number of bytes occupied by a variable's C++ object. The result
+includes struct padding. For heap-backed arrays, it reports the array object's size and does not
+include separately allocated element storage. `sizeOf()` queries the variable's type, so it also
+works for a declared struct whose fields have not been initialized.
 
 The path is relative to the importing file. A module is included once even if imported
 more than once. Circular imports are errors. Imported declarations are combined with the
