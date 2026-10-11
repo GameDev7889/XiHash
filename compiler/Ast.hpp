@@ -2,6 +2,7 @@
 #define XIHASH_AST_H
 
 #include <memory>
+#include <filesystem>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -331,7 +332,8 @@ struct ExternBlock {
 
 struct Program {
     std::vector<std::pair<std::string, SourcePos>> imports;
-    std::vector<std::string> cHeaders;         // from `usingC <header>;`
+    std::vector<std::string> cHeaders;         // from `importC <header>;`
+    std::vector<std::filesystem::path> cSources;
     std::vector<std::string> linkLibraries;    // from `usingL <library>;`
     std::vector<ExternBlock> externBlocks;     // from `extern name { ... }`
     std::vector<std::pair<std::string, SourcePos>> openedNamespaces; // from `using namespace name;`

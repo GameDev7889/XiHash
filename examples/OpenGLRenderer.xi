@@ -1,6 +1,6 @@
 // Requires GLFW and OpenGL development headers/libraries; uses the OpenGL 2.1 fixed-function API.
-usingC <GLFW/glfw3.h>;
-usingC <GL/gl.h>;
+importC <GLFW/glfw3.h>;
+importC <GL/gl.h>;
 usingL <glfw>;
 usingL <GL>;
 

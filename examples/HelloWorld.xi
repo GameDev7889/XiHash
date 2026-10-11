@@ -1,6 +1,6 @@
 // Every component of XiHash is organized into the "XiHash" namespace.
 // It contains all the classes, functions, and other elements that make up the XiHash programming language.
-using XiHash.Console;
+import XiHash.Console;
 
 // Every XiHash program must have a main function, which serves as the entry point of the program.
 // The main function is the entry point of the program.

@@ -1,4 +1,4 @@
-using XiHash.Console;
+import XiHash.Console;
 
 int main()
 {

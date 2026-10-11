@@ -50,6 +50,7 @@ std::string quoted(const fs::path& path) { return "\"" + path.string() + "\""; }
 void appendModule(Program& target, Program source) {
     target.cHeaders.insert(target.cHeaders.end(), source.cHeaders.begin(), source.cHeaders.end());
     target.linkLibraries.insert(target.linkLibraries.end(), source.linkLibraries.begin(), source.linkLibraries.end());
+    target.cSources.insert(target.cSources.end(), source.cSources.begin(), source.cSources.end());
     target.externBlocks.insert(target.externBlocks.end(),
                                std::make_move_iterator(source.externBlocks.begin()),
                                std::make_move_iterator(source.externBlocks.end()));
@@ -82,6 +83,9 @@ Program loadModule(const fs::path& path, const std::string& contents,
     }
 
     Program combined;
+    for (auto& cSource : own.cSources) {
+        cSource = fs::absolute(path.parent_path() / cSource).lexically_normal();
+    }
     for (const auto& [importPath, position] : own.imports) {
         const fs::path importedPath = path.parent_path() / importPath;
         std::ifstream input(importedPath, std::ios::in | std::ios::binary);
@@ -159,6 +163,9 @@ std::optional<int> XiHashCompiler::compile(const XiHashData& file, const Compile
 
     std::ostringstream compileCommand;
     compileCommand << "g++ -std=c++23 -O2 -o " << quoted(binaryPath) << ' ' << quoted(sourcePath);
+    for (const auto& cSource : program.cSources) {
+        compileCommand << ' ' << quoted(cSource);
+    }
     for (const auto& library : program.linkLibraries) {
         compileCommand << " -l" << library;
     }

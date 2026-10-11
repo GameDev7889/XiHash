@@ -1,6 +1,6 @@
 // Demonstrates calling into C/C++ library functions from XiHash.
-usingC <cmath>;
-usingC <cstdlib>;
+importC <cmath>;
+importC <cstdlib>;
 
 // Signatures for the functions we want to call, grouped by header.
 extern cmath {
@@ -14,7 +14,7 @@ extern cstdlib {
 }
 
 // Opens `cmath` so its functions can be called unqualified (without the `cmath.` prefix).
-using namespace cmath;
+import namespace cmath;
 
 int main()
 {

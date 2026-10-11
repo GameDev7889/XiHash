@@ -37,9 +37,9 @@ std::optional<BinaryOp> binaryOpFor(TokenKind kind, int level) {
 }
 
 bool isReserved(const std::string& word) {
-    return typeFromName(word) || word == "return" || word == "using" || word == "if" || word == "else"
+    return typeFromName(word) || word == "return" || word == "using" || word == "importC" || word == "if" || word == "else"
         || word == "true" || word == "false" || word == "null" || word == "new" || word == "delete"
-        || word == "unsafe" || word == "move" || word == "extern" || word == "usingC"
+        || word == "unsafe" || word == "move" || word == "extern"
         || word == "usingL" || word == "namespace" || word == "void" || word == "type"
         || word == "external"
         || word == "while" || word == "import" || word == "const" || word == "static";
@@ -80,7 +80,13 @@ Program Parser::parseProgram() {
     Program program;
     while (true) {
         if (isIdentifier("import")) {
-            parseImport(program);
+            if (peekNext().kind == TokenKind::Identifier && peekNext().text == "namespace") {
+                parseUsingNamespace(program);
+            } else if (peekNext().kind == TokenKind::StringLiteral) {
+                parseImport(program);
+            } else {
+                skipUsing();
+            }
         } else if (isIdentifier("type")) {
             parseTypeAlias();
         } else if (isIdentifier("using")) {
@@ -89,7 +95,7 @@ Program Parser::parseProgram() {
             } else {
                 skipUsing();
             }
-        } else if (isIdentifier("usingC")) {
+        } else if (isIdentifier("importC")) {
             parseUsingC(program);
         } else if (isIdentifier("usingL")) {
             parseUsingLibrary(program);
@@ -127,20 +133,27 @@ void Parser::skipUsing() {
     ++index;
 }
 
-// `using namespace name;` opens a previously declared `extern name { ... }` block so its
+// `import namespace name;` opens a previously declared `extern name { ... }` block so its
 // functions can be called unqualified.
 void Parser::parseUsingNamespace(Program& program) {
-    ++index; // 'using'
+    ++index; // 'import'
     ++index; // 'namespace'
     const Token name = expect(TokenKind::Identifier, "a namespace name");
-    expect(TokenKind::Semicolon, "';' after using namespace");
+    expect(TokenKind::Semicolon, "';' after import namespace");
     program.openedNamespaces.emplace_back(name.text, name.pos);
 }
 
-// `usingC <header>;` includes a system C/C++ header in the generated source.
+// `importC <header>;` includes a system header; `importC "file.cpp";` compiles a source file.
 void Parser::parseUsingC(Program& program) {
-    ++index; // 'usingC'
-    expect(TokenKind::Less, "'<' after usingC");
+    ++index; // 'importC'
+    if (current().kind == TokenKind::StringLiteral) {
+        const Token path = tokens[index++];
+        if (path.text.empty()) throw XiHashError(path.pos, "C/C++ import path cannot be empty");
+        expect(TokenKind::Semicolon, "';' after importC");
+        program.cSources.emplace_back(path.text);
+        return;
+    }
+    expect(TokenKind::Less, "'<' or a quoted source path after importC");
     std::string header;
     while (current().kind != TokenKind::Greater) {
         if (!isHeaderPathToken(current().kind)) {
@@ -152,7 +165,7 @@ void Parser::parseUsingC(Program& program) {
         throw XiHashError(current().pos, "Expected a header name");
     }
     expect(TokenKind::Greater, "'>' after header name");
-    expect(TokenKind::Semicolon, "';' after usingC");
+    expect(TokenKind::Semicolon, "';' after importC");
     program.cHeaders.push_back(std::move(header));
 }
 

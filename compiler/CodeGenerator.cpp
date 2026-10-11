@@ -292,7 +292,7 @@ CodeGenerator::Output CodeGenerator::generate(const Program& program) {
               "#include \"XiHashRuntime.hpp\"\n";
 
     if (!program.cHeaders.empty()) {
-        source << "\n// Headers requested with 'usingC <...>;'\n";
+        source << "\n// Headers requested with 'importC <...>;'\n";
         for (const auto& header : program.cHeaders) {
             source << "#include <" << header << ">\n";
         }
