@@ -5,7 +5,7 @@ XiHash is a small, statically typed language and compiler. The `XiHash` command 
 
 ## Build and run
 
-Build the compiler with CMake (CMake 4.3 or newer and a C++23-capable C++ compiler are
+Build the compiler with CMake (CMake 3.25 or newer and a C++23-capable C++ compiler are
 required):
 
 ```sh
@@ -59,7 +59,7 @@ int main() {
 ```
 
 The supported types are `int`, `uint`, `float`, `ufloat`, `double`, `udouble`, `string`,
-`bool`, `char`, and `void`. `void` is for function return types, not variables or
+`bool`, `char`, `Array<T, N>`, `Array<T>`, and `void`. `void` is for function return types, not variables or
 parameters. A type can be followed by `*` to make a pointer type; see [Pointers and
 ownership](#pointers-and-ownership). Type aliases can be declared at the top level:
 
@@ -74,6 +74,10 @@ storage duration; it can be combined with `const`.
 ```xi
 const int limit = 10;
 static int calls = 0;
+const Array<int, 3> origin = [0, 0, 0];
+Array<int, 3> samples = [4, 5, 6];
+Array<float>* dynamicSamples = new Array<float>([1.0, 2.0]);
+int first = samples[0];
 ```
 
 Names are case-sensitive. Identifiers start with a letter or `_` and may then contain
@@ -96,6 +100,11 @@ while (count > 0) {
     count = count - 1;
 }
 ```
+
+Array types with a size use `std::array` storage and array literals; `Array<T>` uses
+`std::vector` storage and is intended to be used through an owning `Array<T>*` pointer.
+Fixed-size arrays can be declared `const` when initialized with a constant array literal.
+Index both forms with `[index]`.
 
 Expressions include literals, variable names, function calls (`name(args)` or
 `namespace.name(args)`), parentheses, unary `-` and `!`, pointer dereference `*`,
@@ -162,6 +171,42 @@ Top-level XiHash imports use a quoted source path and a semicolon:
 import "helpers.xi";
 ```
 
+The standard `XiHash.Numerals` module can be imported for fixed-size vectors. `Vector2`,
+`Vector3`, and `Vector4` use `float`; suffixes `i`, `u`, and `d` select `int`, `uint`, and
+`double` variants. Constructors are available as `Numerals.Vector2(...)`. Vector values support
+shading-style swizzles such as `position.xy` and `position.rgba`; swizzles can be read or assigned,
+and a multi-component assignment evaluates its right-hand side before writing components.
+Operations can be called on a value (`position.length()`, `direction.Dot(other)`) or on its type
+(`Vector2.length(position)`, `Vector2.Dot(direction, other)`). `Add`, `Subtract`, `Scale`,
+`Normalize`, and `Cross` are also available where their dimensions apply. See
+[Numerals.xi](examples/Numerals.xi) for an example.
+
+Structs can declare fields and be initialized by assigning each field:
+
+```xi
+struct TypeStruct {
+    int integer;
+    float floating;
+}
+
+int main() {
+    TypeStruct value;
+    value.integer = 1;
+    value.floating = 1.0;
+    Console.WriteLine(value.integer);
+    return SUCCESS;
+}
+```
+
+The analyzer tracks which fields are definitely assigned, including across branches and loops,
+and reports reads of uninitialized fields. With optimizations enabled (the default), a complete
+straight-line sequence of constant field assignments is promoted to a `const` aggregate
+initializer when the variable is not written or address-taken later in its function body. The
+generated C++ then has the form `const TypeStruct value{1, 1.0};`. This optimization is skipped
+when the assignments are conditional, interleaved with other statements, non-constant, or followed
+by a later write. Use `--stats` to see how many aggregates were promoted and `--no-opt` to disable
+the optimization. See [AggregateInitialization.xi](examples/AggregateInitialization.xi).
+
 The path is relative to the importing file. A module is included once even if imported
 more than once. Circular imports are errors. Imported declarations are combined with the
 importing program, so duplicate function definitions are errors.
@@ -200,6 +245,6 @@ types.
 ## Compiler limits
 
 XiHash currently supports the syntax and type rules listed above. It does not provide
-classes, arrays, global variables, exceptions, or a general C++ binding system. Functions
+classes, global variables, exceptions, or a general C++ binding system. Functions
 may be declared and called within the loaded XiHash source modules. C++ interop is through
 included headers/source files and explicit `extern` signatures.

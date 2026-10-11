@@ -41,7 +41,7 @@
     },
     "types": {
       "name": "storage.type.xihash",
-      "match": "\\b(int|uint|float|ufloat|double|udouble|string|bool|char|void)\\b"
+      "match": "\\b(int|uint|float|ufloat|double|udouble|string|bool|char|void|Array|Vector[234][iud]?)\\b"
     },
     "constants": {
       "name": "constant.language.xihash",
@@ -49,7 +49,7 @@
     },
     "namespaces": {
       "name": "entity.name.type.xihash",
-      "match": "\\bConsole\\b"
+      "match": "\\b(Console|Numerals)\\b"
     },
     "functions": {
       "name": "entity.name.function.xihash",

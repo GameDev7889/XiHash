@@ -1,5 +1,6 @@
 #include "Analyzer.hpp"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace {
@@ -13,6 +14,9 @@ int rank(const Type& type) {
 }
 
 bool isConvertible(const Type& to, const Expr& expr) {
+    if (to.kind == Type::Array) return expr.type == to;
+    if (to.kind == Type::Vector) return expr.type == to;
+    if (to.kind == Type::Struct) return expr.type == to;
     if (to.kind == Type::Pointer) {
         return expr.type.kind == Type::Null || expr.type == to;
     }
@@ -35,6 +39,7 @@ bool isConvertible(const Type& to, const Expr& expr) {
 
 void Analyzer::registerExterns(Program& program) {
     for (const auto& block : program.externBlocks) {
+        if (block.name == "Numerals" && externBlocks.contains(block.name)) continue;
         if (!externBlocks.emplace(block.name, &block).second) {
             throw XiHashError(block.pos, "Extern block '" + block.name + "' is already declared");
         }
@@ -64,6 +69,15 @@ void Analyzer::registerExterns(Program& program) {
     }
 }
 
+void Analyzer::registerStructs(Program& program) {
+    structDeclarations.clear();
+    for (const auto& declaration : program.structs) {
+        if (!structDeclarations.emplace(declaration.name, &declaration).second) {
+            throw XiHashError(declaration.pos, "Struct '" + declaration.name + "' is already declared");
+        }
+    }
+}
+
 void Analyzer::registerFunctions(Program& program) {
     for (const auto& function : program.functions) {
         if (!xiFunctions.emplace(function.name, &function).second) {
@@ -82,6 +96,7 @@ void Analyzer::registerFunctions(Program& program) {
 }
 
 void Analyzer::analyze(Program& program) {
+    registerStructs(program);
     registerExterns(program);
     registerFunctions(program);
     const Function* entry = nullptr;
@@ -106,7 +121,9 @@ void Analyzer::analyzeFunction(Function& function) {
     scopes.clear();
     scopes.emplace_back();
     for (const auto& param : function.params) {
-        scopes.back().emplace(param.name, VariableInfo{param.type, false});
+        VariableInfo variable{param.type, false};
+        markStructInitialized(variable);
+        scopes.back().emplace(param.name, std::move(variable));
     }
     analyzeBlock(function.body, function);
 }
@@ -128,6 +145,50 @@ std::optional<Type> Analyzer::lookup(const std::string& name) const {
     return std::nullopt;
 }
 
+Analyzer::VariableInfo* Analyzer::findVariable(const std::string& name) {
+    for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope) {
+        const auto variable = scope->find(name);
+        if (variable != scope->end()) return &variable->second;
+    }
+    return nullptr;
+}
+
+const StructField* Analyzer::findStructField(const Type& type, const std::string& name) const {
+    if (type.kind != Type::Struct) return nullptr;
+    const auto declaration = structDeclarations.find(type.structName);
+    if (declaration == structDeclarations.end()) return nullptr;
+    const auto field = std::find_if(declaration->second->fields.begin(), declaration->second->fields.end(),
+                                    [&](const StructField& candidate) { return candidate.name == name; });
+    return field == declaration->second->fields.end() ? nullptr : &*field;
+}
+
+void Analyzer::markStructInitialized(VariableInfo& variable) {
+    if (variable.type.kind != Type::Struct) return;
+    const auto declaration = structDeclarations.find(variable.type.structName);
+    if (declaration == structDeclarations.end()) return;
+    variable.assignedFields.clear();
+    for (const auto& field : declaration->second->fields) variable.assignedFields.insert(field.name);
+    variable.initialized = true;
+}
+
+std::vector<std::unordered_map<std::string, Analyzer::VariableInfo>> Analyzer::mergeStates(
+    const std::vector<std::unordered_map<std::string, VariableInfo>>& left,
+    const std::vector<std::unordered_map<std::string, VariableInfo>>& right) {
+    auto merged = left;
+    for (std::size_t i = 0; i < merged.size() && i < right.size(); ++i) {
+        for (auto& [name, variable] : merged[i]) {
+            const auto other = right[i].find(name);
+            if (other == right[i].end()) continue;
+            variable.initialized = variable.initialized && other->second.initialized;
+            for (auto field = variable.assignedFields.begin(); field != variable.assignedFields.end();) {
+                if (!other->second.assignedFields.contains(*field)) field = variable.assignedFields.erase(field);
+                else ++field;
+            }
+        }
+    }
+    return merged;
+}
+
 void Analyzer::requireConvertible(const Type& to, const Expr& expr, const char* context) {
     if (!isConvertible(to, expr)) {
         throw XiHashError(expr.pos, std::string("Cannot convert ") + typeName(expr.type) + " to " +
@@ -136,10 +197,39 @@ void Analyzer::requireConvertible(const Type& to, const Expr& expr, const char* 
 }
 
 bool Analyzer::isLvalue(const Expr& expr) {
-    return expr.kind == ExprKind::Variable || expr.kind == ExprKind::Deref;
+    return expr.kind == ExprKind::Variable || expr.kind == ExprKind::Deref || expr.kind == ExprKind::Index ||
+           expr.kind == ExprKind::Member;
+}
+
+void Analyzer::analyzeArrayLiteral(ArrayLiteralExpr& expr, const Type* target) {
+    const Type* elementType = target ? target->pointee.get() : nullptr;
+    const std::size_t targetSize = target && target->kind == Type::Vector ? target->vectorSize :
+                                   target && target->kind == Type::Array ? target->arraySize : 0;
+    if (targetSize && expr.elements.size() != targetSize) {
+        throw XiHashError(expr.pos, "Array literal has " + std::to_string(expr.elements.size()) +
+                                     " elements, but the type requires " + std::to_string(targetSize));
+    }
+    if (!elementType && expr.elements.empty()) {
+        throw XiHashError(expr.pos, "Cannot infer the element type of an empty array literal");
+    }
+    bool constant = true;
+    for (auto& element : expr.elements) {
+        analyzeExpr(*element);
+        if (!elementType) elementType = &element->type;
+        if (element->type != *elementType && !isConvertible(*elementType, *element)) {
+            throw XiHashError(element->pos, "Array literal elements must have a consistent type");
+        }
+        constant = constant && element->isConst;
+    }
+    expr.type = target ? *target : makeArray(*elementType, expr.elements.size());
+    expr.isConst = constant;
 }
 
 void Analyzer::analyzeInitializer(ExprPtr& expr, const Type& target, const char* context) {
+    if (expr->kind == ExprKind::ArrayLiteral && (target.kind == Type::Array || target.kind == Type::Vector)) {
+        analyzeArrayLiteral(static_cast<ArrayLiteralExpr&>(*expr), &target);
+        return;
+    }
     if (expr->kind == ExprKind::New) {
         analyzeNew(static_cast<NewExpr&>(*expr), target, context);
         return;
@@ -177,6 +267,65 @@ void Analyzer::analyzeMove(MoveExpr& expr) {
     expr.type = expr.operand->type;
 }
 
+void Analyzer::analyzeMember(MemberExpr& member, bool forWrite) {
+    if (member.object->kind == ExprKind::Variable) {
+        const auto& name = static_cast<VariableExpr&>(*member.object).name;
+        if (VariableInfo* variable = findVariable(name); variable && variable->type.kind == Type::Struct) {
+            const StructField* field = findStructField(variable->type, member.member);
+            if (!field) {
+                throw XiHashError(member.pos, "Struct '" + variable->type.structName + "' has no field '" + member.member + "'");
+            }
+            if (!forWrite && !variable->assignedFields.contains(member.member)) {
+                throw XiHashError(member.pos, "Struct field '" + name + "." + member.member + "' is read before it is assigned");
+            }
+            member.object->type = variable->type;
+            member.object->isConst = variable->isConst;
+            member.memberType = field->type;
+            member.components.clear();
+            member.writable = true;
+            member.type = field->type;
+            member.isConst = variable->isConst;
+            return;
+        }
+    }
+
+    analyzeExpr(*member.object);
+    if (member.object->type.kind != Type::Vector) {
+        throw XiHashError(member.pos, "Member access requires a struct field or vector swizzle");
+    }
+    const std::string& text = member.member;
+    if (text.empty() || text.size() > 4) {
+        throw XiHashError(member.pos, "A vector swizzle must select between one and four components");
+    }
+    const bool color = text.find_first_of("rgba") != std::string::npos;
+    const char* alphabet = color ? "rgba" : "xyzw";
+    if ((color && text.find_first_of("xyzw") != std::string::npos) ||
+        (!color && text.find_first_of("rgba") != std::string::npos)) {
+        throw XiHashError(member.pos, "A swizzle cannot mix xyzw and rgba component names");
+    }
+    member.components.clear();
+    for (const char component : text) {
+        const char* found = std::find(alphabet, alphabet + 4, component);
+        if (found == alphabet + 4 || static_cast<std::size_t>(found - alphabet) >= member.object->type.vectorSize) {
+            throw XiHashError(member.pos, "Swizzle component is not available on " + typeName(member.object->type));
+        }
+        member.components.push_back(static_cast<std::size_t>(found - alphabet));
+    }
+    member.writable = true;
+    if (member.components.size() > 1) {
+        auto assigned = member.components;
+        std::sort(assigned.begin(), assigned.end());
+        if (std::adjacent_find(assigned.begin(), assigned.end()) != assigned.end()) {
+            // Repeated components are valid reads, but cannot form a writable swizzle.
+            member.writable = false;
+        }
+    }
+    member.memberType = text.size() == 1 ? *member.object->type.pointee
+                                         : makeVector(*member.object->type.pointee, text.size());
+    member.type = member.memberType;
+    member.isConst = member.object->isConst;
+}
+
 void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
     switch (stmt.kind) {
         case StmtKind::VarDecl: {
@@ -184,29 +333,81 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
             if (lookup(decl.name)) {
                 throw XiHashError(decl.pos, "Variable '" + decl.name + "' is already declared");
             }
+            if (!decl.init) {
+                if (decl.declType.kind != Type::Struct) {
+                    throw XiHashError(decl.pos, "Only struct variables may be declared without an initializer");
+                }
+                if (decl.isConst) {
+                    throw XiHashError(decl.pos, "A const struct must have an initializer");
+                }
+                scopes.back()[decl.name] = VariableInfo{decl.declType, decl.isConst, false, {}};
+                break;
+            }
             analyzeInitializer(decl.init, decl.declType, "declaration");
             if (decl.isConst && !decl.init->isConst) {
                 throw XiHashError(decl.init->pos, "A const initializer must be a compile-time constant expression");
             }
-            scopes.back()[decl.name] = VariableInfo{decl.declType, decl.isConst};
+            VariableInfo variable{decl.declType, decl.isConst};
+            markStructInitialized(variable);
+            scopes.back()[decl.name] = std::move(variable);
             break;
         }
         case StmtKind::Assign: {
             auto& assign = static_cast<AssignStmt&>(stmt);
-            analyzeExpr(*assign.target);
             if (assign.target->kind == ExprKind::Variable) {
-                const auto& name = static_cast<const VariableExpr&>(*assign.target).name;
-                for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope) {
-                    const auto variable = scope->find(name);
-                    if (variable != scope->end()) {
-                        if (variable->second.isConst) {
-                            throw XiHashError(assign.target->pos, "Cannot assign to const variable '" + name + "'");
-                        }
-                        break;
+                auto& variableExpr = static_cast<VariableExpr&>(*assign.target);
+                VariableInfo* variable = findVariable(variableExpr.name);
+                if (!variable) throw XiHashError(assign.target->pos, "Unknown variable '" + variableExpr.name + "'");
+                if (variable->isConst) throw XiHashError(assign.target->pos, "Cannot assign to const variable '" + variableExpr.name + "'");
+                assign.target->type = variable->type;
+                assign.target->isConst = false;
+            } else if (assign.target->kind == ExprKind::Member) {
+                auto& member = static_cast<MemberExpr&>(*assign.target);
+                analyzeMember(member, true);
+                if (!member.writable) {
+                    throw XiHashError(assign.target->pos, "A swizzle with repeated components cannot be assigned");
+                }
+                Expr* object = member.object.get();
+                while (object->kind == ExprKind::Member) object = static_cast<MemberExpr&>(*object).object.get();
+                if (object->kind == ExprKind::Variable) {
+                    const auto& name = static_cast<VariableExpr&>(*object).name;
+                    if (VariableInfo* variable = findVariable(name); variable && variable->isConst) {
+                        throw XiHashError(assign.target->pos, "Cannot modify a member of const variable '" + name + "'");
+                    }
+                }
+            } else {
+                analyzeExpr(*assign.target);
+                Expr* base = assign.target.get();
+                while (base->kind == ExprKind::Index || base->kind == ExprKind::Member) {
+                    base = base->kind == ExprKind::Index ? static_cast<IndexExpr&>(*base).array.get()
+                                                        : static_cast<MemberExpr&>(*base).object.get();
+                }
+                if (base->kind == ExprKind::Variable) {
+                    const auto& name = static_cast<VariableExpr&>(*base).name;
+                    if (VariableInfo* variable = findVariable(name); variable && variable->isConst &&
+                        (variable->type.kind == Type::Array || variable->type.kind == Type::Vector)) {
+                        throw XiHashError(assign.target->pos, "Cannot modify an element of const array '" + name + "'");
                     }
                 }
             }
             analyzeInitializer(assign.value, assign.target->type, "assignment");
+            if (assign.target->kind == ExprKind::Variable) {
+                VariableInfo* variable = findVariable(static_cast<VariableExpr&>(*assign.target).name);
+                if (variable && variable->type.kind == Type::Struct) markStructInitialized(*variable);
+            } else if (assign.target->kind == ExprKind::Member) {
+                auto& member = static_cast<MemberExpr&>(*assign.target);
+                if (member.object->kind == ExprKind::Variable && member.object->type.kind == Type::Struct) {
+                    VariableInfo* variable = findVariable(static_cast<VariableExpr&>(*member.object).name);
+                    if (variable) {
+                        variable->assignedFields.insert(member.member);
+                        const auto declaration = structDeclarations.find(variable->type.structName);
+                        if (declaration != structDeclarations.end() &&
+                            variable->assignedFields.size() == declaration->second->fields.size()) {
+                            variable->initialized = true;
+                        }
+                    }
+                }
+            }
             break;
         }
         case StmtKind::Delete: {
@@ -241,8 +442,13 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
                 throw XiHashError(ifStmt.condition->pos, std::string("Condition must be bool, got ") +
                                                              typeName(ifStmt.condition->type));
             }
+            const auto before = scopes;
             analyzeBlock(ifStmt.thenBody, function);
+            const auto thenState = scopes;
+            scopes = before;
             analyzeBlock(ifStmt.elseBody, function);
+            const auto elseState = scopes;
+            scopes = mergeStates(thenState, elseState);
             break;
         }
         case StmtKind::While: {
@@ -252,7 +458,9 @@ void Analyzer::analyzeStatement(Stmt& stmt, const Function& function) {
                 throw XiHashError(whileStmt.condition->pos, std::string("Condition must be bool, got ") +
                                                                typeName(whileStmt.condition->type));
             }
+            const auto before = scopes;
             analyzeBlock(whileStmt.body, function);
+            scopes = before; // A loop may execute zero times.
             break;
         }
         case StmtKind::Return: {
@@ -327,6 +535,9 @@ void Analyzer::analyzeExpr(Expr& expr) {
             for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope) {
                 const auto variable = scope->find(name);
                 if (variable != scope->end()) {
+                    if (!variable->second.initialized) {
+                        throw XiHashError(expr.pos, "Struct variable '" + name + "' is read before all fields are assigned");
+                    }
                     expr.type = variable->second.type;
                     expr.isConst = variable->second.isConst;
                     found = true;
@@ -367,6 +578,81 @@ void Analyzer::analyzeExpr(Expr& expr) {
         case ExprKind::Call:
             analyzeCall(static_cast<CallExpr&>(expr));
             break;
+        case ExprKind::ArrayLiteral:
+            analyzeArrayLiteral(static_cast<ArrayLiteralExpr&>(expr));
+            break;
+        case ExprKind::Index: {
+            auto& subscript = static_cast<IndexExpr&>(expr);
+            analyzeExpr(*subscript.array);
+            analyzeExpr(*subscript.index);
+            const Type* arrayType = &subscript.array->type;
+            if (arrayType->kind == Type::Pointer && (arrayType->pointee->kind == Type::Array ||
+                                                     arrayType->pointee->kind == Type::Vector)) {
+                arrayType = arrayType->pointee.get();
+            }
+            if (arrayType->kind != Type::Array && arrayType->kind != Type::Vector) {
+                throw XiHashError(subscript.array->pos, "Indexing requires an Array or Vector value");
+            }
+            if (subscript.index->type != Type::Int && subscript.index->type != Type::UInt) {
+                throw XiHashError(subscript.index->pos, "Array index must be int or uint");
+            }
+            expr.type = *arrayType->pointee;
+            expr.isConst = subscript.array->isConst;
+            break;
+        }
+        case ExprKind::Member: {
+            analyzeMember(static_cast<MemberExpr&>(expr), false);
+            break;
+        }
+        case ExprKind::MethodCall: {
+            auto& call = static_cast<MethodCallExpr&>(expr);
+            analyzeExpr(*call.object);
+            if (call.object->type.kind != Type::Vector) {
+                throw XiHashError(call.pos, "Vector methods require a vector receiver");
+            }
+            const Type vectorType = call.object->type;
+            const std::size_t dimension = vectorType.vectorSize;
+            const std::string suffix = vectorType.pointee->kind == Type::Float ? "" :
+                vectorType.pointee->kind == Type::Int ? "i" : vectorType.pointee->kind == Type::UInt ? "u" : "d";
+            const std::string dim = std::to_string(dimension);
+            const auto sameVectorArg = [&]() {
+                if (call.args.size() != 1) throw XiHashError(call.pos, "Vector method expects one vector argument");
+                analyzeExpr(*call.args[0]);
+                if (call.args[0]->type != vectorType) throw XiHashError(call.args[0]->pos, "Vector method argument must have the same vector type");
+            };
+            if (call.method == "length" || call.method == "Length") {
+                if (!call.args.empty()) throw XiHashError(call.pos, "length() takes no arguments");
+                call.cppFunction = "length" + dim + suffix;
+                expr.type = *vectorType.pointee;
+            } else if (call.method == "normalize" || call.method == "Normalize") {
+                if (!call.args.empty()) throw XiHashError(call.pos, "normalize() takes no arguments");
+                call.cppFunction = "normalize" + dim + suffix;
+                expr.type = vectorType;
+            } else if (call.method == "Dot" || call.method == "dot") {
+                sameVectorArg();
+                call.cppFunction = "dot" + dim + suffix;
+                expr.type = *vectorType.pointee;
+            } else if (call.method == "Add" || call.method == "add" ||
+                       call.method == "Subtract" || call.method == "subtract") {
+                sameVectorArg();
+                call.cppFunction = (call.method == "Add" || call.method == "add" ? "add" : "subtract") + dim + suffix;
+                expr.type = vectorType;
+            } else if (call.method == "Scale" || call.method == "scale") {
+                if (call.args.size() != 1) throw XiHashError(call.pos, "scale() expects one scalar argument");
+                analyzeExpr(*call.args[0]);
+                requireConvertible(*vectorType.pointee, *call.args[0], "vector scale");
+                call.cppFunction = "scale" + dim + suffix;
+                expr.type = vectorType;
+            } else if (call.method == "Cross" || call.method == "cross") {
+                if (dimension != 3) throw XiHashError(call.pos, "cross() is only available on Vector3");
+                sameVectorArg();
+                call.cppFunction = "cross3" + suffix;
+                expr.type = vectorType;
+            } else {
+                throw XiHashError(call.pos, "Unknown vector method '" + call.method + "'");
+            }
+            break;
+        }
     }
 }
 

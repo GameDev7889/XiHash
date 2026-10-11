@@ -4,6 +4,8 @@
 #include <charconv>
 #include <optional>
 #include <cctype>
+#include <limits>
+#include <unordered_set>
 
 namespace {
 // Binary operator precedence levels, lowest to highest. Level 6 is unary.
@@ -42,7 +44,8 @@ bool isReserved(const std::string& word) {
         || word == "unsafe" || word == "move" || word == "extern"
         || word == "usingL" || word == "namespace" || word == "void" || word == "type"
         || word == "external"
-        || word == "while" || word == "import" || word == "const" || word == "static";
+        || word == "while" || word == "import" || word == "const" || word == "static" || word == "Array"
+        || word == "struct";
 }
 
 bool isHeaderPathToken(TokenKind kind) {
@@ -84,11 +87,15 @@ Program Parser::parseProgram() {
                 parseUsingNamespace(program);
             } else if (peekNext().kind == TokenKind::StringLiteral) {
                 parseImport(program);
+            } else if (peekNext().kind == TokenKind::Identifier) {
+                parseNamedImport(program);
             } else {
                 skipUsing();
             }
         } else if (isIdentifier("type")) {
             parseTypeAlias();
+        } else if (isIdentifier("struct")) {
+            parseStruct(program);
         } else if (isIdentifier("using")) {
             if (peekNext().kind == TokenKind::Identifier && peekNext().text == "namespace") {
                 parseUsingNamespace(program);
@@ -109,6 +116,106 @@ Program Parser::parseProgram() {
         program.functions.push_back(parseFunction());
     }
     return program;
+}
+
+void Parser::parseStruct(Program& program) {
+    const SourcePos pos = current().pos;
+    ++index;
+    const Token name = expectIdentifier("a struct name");
+    if (typeAliases.contains(name.text) || typeFromName(name.text)) {
+        throw XiHashError(name.pos, "Type '" + name.text + "' is already declared");
+    }
+    expect(TokenKind::LBrace, "'{' after struct name");
+    StructDecl declaration;
+    declaration.pos = pos;
+    declaration.name = name.text;
+    std::unordered_set<std::string> fieldNames;
+    while (current().kind != TokenKind::RBrace) {
+        if (current().kind == TokenKind::End) throw XiHashError(current().pos, "Expected '}' to close struct");
+        const Type fieldType = parseType();
+        const Token fieldName = expectIdentifier("a struct field name");
+        expect(TokenKind::Semicolon, "';' after struct field");
+        if (fieldType == Type::Void || fieldType.kind == Type::Struct || fieldType.kind == Type::Pointer) {
+            throw XiHashError(fieldName.pos, "Struct fields must have a concrete non-pointer value type");
+        }
+        if (!fieldNames.insert(fieldName.text).second) {
+            throw XiHashError(fieldName.pos, "Struct field '" + fieldName.text + "' is already declared");
+        }
+        declaration.fields.push_back({fieldType, fieldName.text});
+    }
+    ++index;
+    if (declaration.fields.empty()) throw XiHashError(pos, "A struct must have at least one field");
+    typeAliases.emplace(name.text, makeStruct(name.text));
+    program.structs.push_back(std::move(declaration));
+}
+
+void Parser::parseNamedImport(Program& program) {
+    const SourcePos pos = current().pos;
+    ++index;
+    const Token root = expect(TokenKind::Identifier, "a module namespace");
+    expect(TokenKind::Dot, "'.' in a module name");
+    const Token name = expect(TokenKind::Identifier, "a module name");
+    expect(TokenKind::Semicolon, "';' after module import");
+    if (root.text != "XiHash" || name.text != "Numerals") {
+        throw XiHashError(pos, "Unknown XiHash module '" + root.text + "." + name.text + "'");
+    }
+    if (typeAliases.contains("Vector2")) return;
+    typeAliases.emplace("Vector2", makeVector(Type::Float, 2));
+    typeAliases.emplace("Vector3", makeVector(Type::Float, 3));
+    typeAliases.emplace("Vector4", makeVector(Type::Float, 4));
+    for (const auto& suffix : {std::string("i"), std::string("u"), std::string("d")}) {
+        const Type scalar = suffix == "i" ? Type::Int : suffix == "u" ? Type::UInt : Type::Double;
+        for (const int n : {2, 3, 4}) {
+            typeAliases.emplace("Vector" + std::to_string(n) + suffix, makeVector(scalar, n));
+        }
+    }
+    program.cHeaders.emplace_back("XiHash/Numerals.hpp");
+    ExternBlock numerals;
+    numerals.pos = pos;
+    numerals.name = "Numerals";
+    const auto add = [&](std::string fn, Type ret, std::vector<ExternParam> params) {
+        numerals.functions.push_back({pos, std::move(ret), std::move(fn), std::move(params)});
+    };
+    const auto param = [](Type type, const char* name) { return ExternParam{std::move(type), name}; };
+    add("Vector2", makeVector(Type::Float, 2), {param(Type::Float, "x"), param(Type::Float, "y")});
+    add("Vector3", makeVector(Type::Float, 3), {param(Type::Float, "x"), param(Type::Float, "y"), param(Type::Float, "z")});
+    add("Vector4", makeVector(Type::Float, 4), {param(Type::Float, "x"), param(Type::Float, "y"), param(Type::Float, "z"), param(Type::Float, "w")});
+    for (const auto& suffix : {std::string("i"), std::string("u"), std::string("d")}) {
+        const Type scalar = suffix == "i" ? Type::Int : suffix == "u" ? Type::UInt : Type::Double;
+        for (const int n : {2, 3, 4}) {
+            std::vector<ExternParam> params;
+            for (int i = 0; i < n; ++i) params.push_back(param(scalar, "component"));
+            add("Vector" + std::to_string(n) + suffix, makeVector(scalar, n), std::move(params));
+        }
+    }
+    for (const int n : {2, 3, 4}) {
+        const Type vec = makeVector(Type::Float, n);
+        const auto vectorParam = [&, vec](const char* label) { return param(vec, label); };
+        add("add" + std::to_string(n), vec, {vectorParam("left"), vectorParam("right")});
+        add("subtract" + std::to_string(n), vec, {vectorParam("left"), vectorParam("right")});
+        add("scale" + std::to_string(n), vec, {vectorParam("value"), param(Type::Float, "scalar")});
+        add("dot" + std::to_string(n), Type::Float, {vectorParam("left"), vectorParam("right")});
+        add("length" + std::to_string(n), Type::Float, {vectorParam("value")});
+        add("normalize" + std::to_string(n), vec, {vectorParam("value")});
+    }
+    const Type vec3 = makeVector(Type::Float, 3);
+    add("cross3", vec3, {param(vec3, "left"), param(vec3, "right")});
+    for (const auto& suffix : {std::string("i"), std::string("u"), std::string("d")}) {
+        const Type scalar = suffix == "i" ? Type::Int : suffix == "u" ? Type::UInt : Type::Double;
+        for (const int n : {2, 3, 4}) {
+            const Type vec = makeVector(scalar, n);
+            const auto vectorParam = [&, vec](const char* label) { return param(vec, label); };
+            add("add" + std::to_string(n) + suffix, vec, {vectorParam("left"), vectorParam("right")});
+            add("subtract" + std::to_string(n) + suffix, vec, {vectorParam("left"), vectorParam("right")});
+            add("scale" + std::to_string(n) + suffix, vec, {vectorParam("value"), param(scalar, "scalar")});
+            add("dot" + std::to_string(n) + suffix, scalar, {vectorParam("left"), vectorParam("right")});
+            add("length" + std::to_string(n) + suffix, scalar, {vectorParam("value")});
+            add("normalize" + std::to_string(n) + suffix, vec, {vectorParam("value")});
+        }
+        const Type three = makeVector(scalar, 3);
+        add("cross3" + suffix, three, {param(three, "left"), param(three, "right")});
+    }
+    program.externBlocks.push_back(std::move(numerals));
 }
 
 void Parser::parseImport(Program& program) {
@@ -255,7 +362,7 @@ void Parser::parseExternBlock(Program& program) {
 
 bool Parser::startsType() const {
     return current().kind == TokenKind::Identifier &&
-        (current().text == "unsafe" || typeFromName(current().text) || typeAliases.contains(current().text));
+        (current().text == "unsafe" || current().text == "Array" || typeFromName(current().text) || typeAliases.contains(current().text));
 }
 
 // [unsafe] base-type {'*'}. `unsafe` applies to the outermost pointer.
@@ -266,6 +373,37 @@ Type Parser::parseType() {
         isUnsafe = true;
     }
     const Token baseToken = expect(TokenKind::Identifier, "a type");
+    if (baseToken.text == "Array") {
+        expect(TokenKind::Less, "'<' after Array");
+        Type element = parseType();
+        std::size_t size = 0;
+        if (current().kind == TokenKind::Comma) {
+            ++index;
+            const Token sizeToken = expect(TokenKind::IntLiteral, "a fixed array length");
+            unsigned long long parsed = 0;
+            const auto result = std::from_chars(sizeToken.text.data(), sizeToken.text.data() + sizeToken.text.size(), parsed);
+            if (result.ec != std::errc() || parsed == 0 || parsed > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+                throw XiHashError(sizeToken.pos, "Array length must be a positive integer");
+            }
+            size = static_cast<std::size_t>(parsed);
+        }
+        expect(TokenKind::Greater, "'>' after Array type");
+        if (element == Type::Void || element.kind == Type::Array) {
+            throw XiHashError(baseToken.pos, "Array elements must have a non-array, non-void type");
+        }
+        Type array = makeArray(element, size);
+        bool isPointerType = false;
+        while (current().kind == TokenKind::Star) {
+            ++index;
+            array = makePointer(array, false);
+            isPointerType = true;
+        }
+        if (isUnsafe) {
+            if (!isPointerType) throw XiHashError(baseToken.pos, "'unsafe' can only be applied to a pointer type");
+            array.isUnsafe = true;
+        }
+        return array;
+    }
     const auto alias = typeAliases.find(baseToken.text);
     const auto base = alias != typeAliases.end() ? std::optional<Type>(alias->second) : typeFromName(baseToken.text);
     if (!base) {
@@ -428,6 +566,13 @@ StmtPtr Parser::parseStatement() {
         }
         const Type declType = parseType();
         const Token name = expectIdentifier("a variable name");
+        if (current().kind == TokenKind::Semicolon) {
+            if (declType.kind != Type::Struct) {
+                throw XiHashError(current().pos, "Only struct variables may be declared without an initializer");
+            }
+            ++index;
+            return std::make_unique<VarDeclStmt>(pos, declType, name.text, nullptr, isConst, isStatic);
+        }
         expect(TokenKind::Assign, "'=' (variables must be initialized)");
         auto init = parseExpression();
         expect(TokenKind::Semicolon, "';' after declaration");
@@ -443,10 +588,17 @@ StmtPtr Parser::parseStatement() {
                                             std::move(value));
     }
 
-    // A call used for its side effect, e.g. `srand(42);` or `cmath.srand(42);`.
+    // Index assignment or a call used for its side effect.
     if (current().kind == TokenKind::Identifier && !isReserved(current().text) &&
-        (peekNext().kind == TokenKind::LParen || peekNext().kind == TokenKind::Dot)) {
+        (peekNext().kind == TokenKind::LParen || peekNext().kind == TokenKind::Dot ||
+         peekNext().kind == TokenKind::LBracket)) {
         auto expr = parseExpression();
+        if (current().kind == TokenKind::Assign) {
+            ++index;
+            auto value = parseExpression();
+            expect(TokenKind::Semicolon, "';' after assignment");
+            return std::make_unique<AssignStmt>(pos, std::move(expr), std::move(value));
+        }
         expect(TokenKind::Semicolon, "';' after expression");
         return std::make_unique<ExprStmt>(pos, std::move(expr));
     }
@@ -484,7 +636,59 @@ ExprPtr Parser::parseUnary() {
         const Token op = tokens[index++];
         return std::make_unique<AddressOfExpr>(op.pos, parseUnary());
     }
-    return parsePrimary();
+    return parsePostfix(parsePrimary());
+}
+
+ExprPtr Parser::parsePostfix(ExprPtr expression) {
+    while (current().kind == TokenKind::LBracket || current().kind == TokenKind::Dot) {
+        if (current().kind == TokenKind::LBracket) {
+            const SourcePos pos = current().pos;
+            ++index;
+            auto subscript = parseExpression();
+            expect(TokenKind::RBracket, "']' after array index");
+            expression = std::make_unique<IndexExpr>(pos, std::move(expression), std::move(subscript));
+            continue;
+        }
+        const SourcePos pos = current().pos;
+        ++index;
+        const Token member = expect(TokenKind::Identifier, "a member or method name");
+        const std::string* baseName = expression->kind == ExprKind::Variable
+            ? &static_cast<VariableExpr&>(*expression).name : nullptr;
+        if (current().kind == TokenKind::LParen) {
+            static const std::unordered_set<std::string> vectorMethods = {
+                "length", "Length", "Dot", "dot", "Add", "add", "Subtract", "subtract",
+                "Scale", "scale", "Normalize", "normalize", "Cross", "cross"
+            };
+            if (baseName && typeAliases.contains(*baseName)) {
+                const Type vector = typeAliases.at(*baseName);
+                const std::string suffix = vector.pointee->kind == Type::Float ? "" :
+                    vector.pointee->kind == Type::Int ? "i" : vector.pointee->kind == Type::UInt ? "u" : "d";
+                const std::string dim = std::to_string(vector.vectorSize);
+                std::string fn;
+                if (member.text == "Dot" || member.text == "dot") fn = "dot" + dim + suffix;
+                else if (member.text == "Length" || member.text == "length") fn = "length" + dim + suffix;
+                else if (member.text == "Add" || member.text == "add") fn = "add" + dim + suffix;
+                else if (member.text == "Subtract" || member.text == "subtract") fn = "subtract" + dim + suffix;
+                else if (member.text == "Scale" || member.text == "scale") fn = "scale" + dim + suffix;
+                else if (member.text == "Normalize" || member.text == "normalize") fn = "normalize" + dim + suffix;
+                else if (member.text == "Cross" || member.text == "cross") fn = "cross3" + suffix;
+                if (!fn.empty()) {
+                    expression = std::make_unique<CallExpr>(pos, "Numerals", fn, parseArgs());
+                    continue;
+                }
+            }
+            if (vectorMethods.contains(member.text)) {
+                expression = std::make_unique<MethodCallExpr>(pos, std::move(expression), member.text, parseArgs());
+            } else if (baseName) {
+                expression = std::make_unique<CallExpr>(pos, *baseName, member.text, parseArgs());
+            } else {
+                throw XiHashError(pos, "A namespace call must start with a namespace name");
+            }
+        } else {
+            expression = std::make_unique<MemberExpr>(pos, std::move(expression), member.text);
+        }
+    }
+    return expression;
 }
 
 ExprPtr Parser::parsePrimary() {
@@ -513,6 +717,19 @@ ExprPtr Parser::parsePrimary() {
             auto inner = parseExpression();
             expect(TokenKind::RParen, "')'");
             return inner;
+        }
+        case TokenKind::LBracket: {
+            ++index;
+            std::vector<ExprPtr> elements;
+            if (current().kind != TokenKind::RBracket) {
+                while (true) {
+                    elements.push_back(parseExpression());
+                    if (current().kind != TokenKind::Comma) break;
+                    ++index;
+                }
+            }
+            expect(TokenKind::RBracket, "']' after array literal");
+            return std::make_unique<ArrayLiteralExpr>(token.pos, std::move(elements));
         }
         case TokenKind::Identifier:
             if (token.text == "SUCCESS" || token.text == "FAILURE") {
@@ -547,11 +764,6 @@ ExprPtr Parser::parsePrimary() {
             }
             if (current().kind == TokenKind::LParen) {
                 return std::make_unique<CallExpr>(token.pos, std::string(), token.text, parseArgs());
-            }
-            if (current().kind == TokenKind::Dot) {
-                ++index;
-                const Token member = expect(TokenKind::Identifier, "a function name");
-                return std::make_unique<CallExpr>(token.pos, token.text, member.text, parseArgs());
             }
             return std::make_unique<VariableExpr>(token.pos, token.text);
         default:

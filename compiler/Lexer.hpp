@@ -9,7 +9,7 @@
 
 enum class TokenKind {
     Identifier, IntLiteral, FloatLiteral, StringLiteral, CharLiteral,
-    LParen, RParen, LBrace, RBrace, Semicolon, Comma, Assign, Plus, Minus, Star, Slash, Dot,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket, Semicolon, Comma, Assign, Plus, Minus, Star, Slash, Dot,
     Bang, Amp, EqEq, NotEq, Less, LessEq, Greater, GreaterEq, AmpAmp, PipePipe, End
 };
 

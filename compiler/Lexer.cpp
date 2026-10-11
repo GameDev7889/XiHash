@@ -165,6 +165,8 @@ std::vector<Token> lex(std::string_view source) {
                 case ')': kind = TokenKind::RParen; break;
                 case '{': kind = TokenKind::LBrace; break;
                 case '}': kind = TokenKind::RBrace; break;
+                case '[': kind = TokenKind::LBracket; break;
+                case ']': kind = TokenKind::RBracket; break;
                 case ';': kind = TokenKind::Semicolon; break;
                 case ',': kind = TokenKind::Comma; break;
                 case '=': kind = TokenKind::Assign; break;

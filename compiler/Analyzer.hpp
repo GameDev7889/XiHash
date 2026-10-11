@@ -17,12 +17,21 @@ public:
     void analyze(Program& program);
 
 private:
+    struct VariableInfo {
+        Type type;
+        bool isConst;
+        bool initialized = true;
+        std::unordered_set<std::string> assignedFields;
+    };
+
     void registerExterns(Program& program);
+    void registerStructs(Program& program);
     void registerFunctions(Program& program);
     void analyzeFunction(Function& function);
     void analyzeBlock(std::vector<StmtPtr>& body, const Function& function);
     void analyzeStatement(Stmt& stmt, const Function& function);
     void analyzeExpr(Expr& expr);
+    void analyzeMember(MemberExpr& expr, bool forWrite);
     void analyzeCall(CallExpr& expr);
     void analyzeBinary(BinaryExpr& expr);
     Type unifyNumeric(const BinaryExpr& expr);
@@ -32,16 +41,20 @@ private:
     void analyzeInitializer(ExprPtr& expr, const Type& target, const char* context);
     void analyzeNew(NewExpr& expr, const Type& target, const char* context);
     void analyzeMove(MoveExpr& expr);
+    void analyzeArrayLiteral(ArrayLiteralExpr& expr, const Type* target = nullptr);
     static bool isLvalue(const Expr& expr);
     std::optional<Type> lookup(const std::string& name) const;
+    VariableInfo* findVariable(const std::string& name);
+    const StructField* findStructField(const Type& type, const std::string& name) const;
+    void markStructInitialized(VariableInfo& variable);
+    static std::vector<std::unordered_map<std::string, VariableInfo>> mergeStates(
+        const std::vector<std::unordered_map<std::string, VariableInfo>>& left,
+        const std::vector<std::unordered_map<std::string, VariableInfo>>& right);
 
-    struct VariableInfo {
-        Type type;
-        bool isConst;
-    };
     std::vector<std::unordered_map<std::string, VariableInfo>> scopes;
     std::unordered_map<std::string, const ExternBlock*> externBlocks;
     std::unordered_map<std::string, const Function*> xiFunctions;
+    std::unordered_map<std::string, const StructDecl*> structDeclarations;
     std::vector<std::string> openNamespaces;
 };
 

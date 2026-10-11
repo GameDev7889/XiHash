@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.3)
+cmake_minimum_required(VERSION 3.25)
 project(XiHash)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -21,4 +21,7 @@ add_executable(XiHash compiler.cpp
         compiler/GetXiHashFile.hpp
         compiler/XiHashCompiler.cpp
         compiler/XiHashCompiler.hpp
+        include/XiHash/Numerals.hpp
 )
+
+target_compile_definitions(XiHash PRIVATE XIHASH_MODULE_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/include")

@@ -72,6 +72,13 @@ std::string CodeGenerator::genType(const Type& type) {
                 return genType(*type.pointee) + "*";
             }
             return "std::unique_ptr<" + genType(*type.pointee) + ">";
+        case Type::Array:
+            if (type.arraySize == 0) return "std::vector<" + genType(*type.pointee) + ">";
+            return "std::array<" + genType(*type.pointee) + ", " + std::to_string(type.arraySize) + ">";
+        case Type::Vector:
+            return "std::array<" + genType(*type.pointee) + ", " + std::to_string(type.vectorSize) + ">";
+        case Type::Struct:
+            return type.structName;
         case Type::Void: return "void";
     }
     return "void";
@@ -97,7 +104,8 @@ std::string CodeGenerator::genCall(const CallExpr& expr) {
     // The namespace is a XiHash-only organizational label (the real function lives in whatever
     // namespace the included header puts it in, almost always the global namespace), so it's
     // dropped here; only the resolved function name and casted arguments are emitted.
-    std::string result = (expr.xiFunction ? "xihash_fn_" : "") + expr.name + "(";
+    std::string result = std::string(expr.external && expr.ns == "Numerals" ? "XiHash::Numerals::" : "") +
+                         (expr.xiFunction ? "xihash_fn_" : "") + expr.name + "(";
     for (std::size_t i = 0; i < expr.args.size(); ++i) {
         if (i > 0) {
             result += ", ";
@@ -144,6 +152,46 @@ std::string CodeGenerator::genExpr(const Expr& expr) {
             return "std::move(" + genExpr(*static_cast<const MoveExpr&>(expr).operand) + ")";
         case ExprKind::Call:
             return genCall(static_cast<const CallExpr&>(expr));
+        case ExprKind::ArrayLiteral: {
+            const auto& array = static_cast<const ArrayLiteralExpr&>(expr);
+            std::string elements;
+            for (std::size_t i = 0; i < array.elements.size(); ++i) {
+                if (i) elements += ", ";
+                elements += castTo(*expr.type.pointee, genExpr(*array.elements[i]));
+            }
+            if (expr.type.kind == Type::Array && expr.type.arraySize == 0) {
+                return "std::vector<" + genType(*expr.type.pointee) + ">{" + elements + "}";
+            }
+            const std::size_t size = expr.type.kind == Type::Vector ? expr.type.vectorSize : expr.type.arraySize;
+            return "std::array<" + genType(*expr.type.pointee) + ", " +
+                   std::to_string(size) + ">{" + elements + "}";
+        }
+        case ExprKind::Index: {
+            const auto& index = static_cast<const IndexExpr&>(expr);
+            const std::string array = isPointer(index.array->type) &&
+                (index.array->type.pointee->kind == Type::Array || index.array->type.pointee->kind == Type::Vector)
+                ? "(*" + genExpr(*index.array) + ")" : genExpr(*index.array);
+            return array + "[" + genExpr(*index.index) + "]";
+        }
+        case ExprKind::Member: {
+            const auto& member = static_cast<const MemberExpr&>(expr);
+            const std::string object = genExpr(*member.object);
+            if (member.object->type.kind == Type::Struct) return object + "." + member.member;
+            if (member.components.size() == 1) return object + "[" + std::to_string(member.components[0]) + "]";
+            std::string result = "std::array<" + genType(*member.object->type.pointee) + ", " +
+                                 std::to_string(member.components.size()) + ">{";
+            for (std::size_t i = 0; i < member.components.size(); ++i) {
+                if (i) result += ", ";
+                result += object + "[" + std::to_string(member.components[i]) + "]";
+            }
+            return result + "}";
+        }
+        case ExprKind::MethodCall: {
+            const auto& call = static_cast<const MethodCallExpr&>(expr);
+            std::string result = "XiHash::Numerals::" + call.cppFunction + "(" + genExpr(*call.object);
+            for (const auto& arg : call.args) result += ", " + genExpr(*arg);
+            return result + ")";
+        }
         case ExprKind::Binary:
             return genBinary(static_cast<const BinaryExpr&>(expr));
     }
@@ -175,12 +223,35 @@ std::string CodeGenerator::genStmt(const Stmt& stmt, int indent) {
     switch (stmt.kind) {
         case StmtKind::VarDecl: {
             const auto& decl = static_cast<const VarDeclStmt&>(stmt);
-            return pad + (decl.isStatic ? "static " : "") + (decl.isConst ? "const " : "") +
-                   genType(decl.declType) + " " + decl.name + " = " +
-                   castTo(decl.declType, genExpr(*decl.init)) + ";\n";
+            const std::string prefix = pad + (decl.isStatic ? "static " : "") + (decl.isConst ? "const " : "") +
+                                       genType(decl.declType) + " " + decl.name;
+            if (decl.aggregatePromoted) {
+                std::string values;
+                for (std::size_t i = 0; i < decl.aggregateValues.size(); ++i) {
+                    if (i) values += ", ";
+                    values += castTo(decl.aggregateTypes[i], genExpr(*decl.aggregateValues[i]));
+                }
+                return prefix + "{" + values + "};\n";
+            }
+            if (!decl.init) return prefix + "{};\n";
+            return prefix + " = " + castTo(decl.declType, genExpr(*decl.init)) + ";\n";
         }
         case StmtKind::Assign: {
             const auto& assign = static_cast<const AssignStmt&>(stmt);
+            if (assign.target->kind == ExprKind::Member) {
+                const auto& member = static_cast<const MemberExpr&>(*assign.target);
+                if (member.components.size() > 1) {
+                    const std::string temporary = "xihash_swizzle_" + std::to_string(stmt.pos.line) + "_" +
+                                                  std::to_string(stmt.pos.column);
+                    const std::string object = genExpr(*member.object);
+                    std::string result = pad + "{ auto " + temporary + " = " + genExpr(*assign.value) + ";\n";
+                    for (std::size_t i = 0; i < member.components.size(); ++i) {
+                        result += pad + "    " + object + "[" + std::to_string(member.components[i]) + "] = " +
+                                  temporary + "[" + std::to_string(i) + "];\n";
+                    }
+                    return result + pad + "}\n";
+                }
+            }
             return pad + genExpr(*assign.target) + " = " +
                    castTo(assign.target->type, genExpr(*assign.value)) + ";\n";
         }
@@ -249,10 +320,12 @@ CodeGenerator::Output CodeGenerator::generate(const Program& program) {
         "\n"
         "// Generated by the XiHash compiler. Small helpers used by the generated .cpp file.\n"
         "#include <cstdint>\n"
+        "#include <array>\n"
         "#include <format>\n"
         "#include <iostream>\n"
         "#include <memory>\n"
         "#include <string>\n"
+        "#include <vector>\n"
         "\n"
         "namespace xihash {\n"
         "\n"
@@ -285,9 +358,11 @@ CodeGenerator::Output CodeGenerator::generate(const Program& program) {
     std::ostringstream source;
     source << "// Generated by the XiHash compiler. Do not edit; re-run XiHash on the .xi source instead.\n"
               "#include <cstdint>\n"
+              "#include <array>\n"
               "#include <memory>\n"
               "#include <string>\n"
               "#include <utility>\n"
+              "#include <vector>\n"
               "\n"
               "#include \"XiHashRuntime.hpp\"\n";
 
@@ -298,6 +373,14 @@ CodeGenerator::Output CodeGenerator::generate(const Program& program) {
         }
     }
     source << "\n";
+
+    for (const auto& declaration : program.structs) {
+        source << "struct " << declaration.name << " {\n";
+        for (const auto& field : declaration.fields) {
+            source << "    " << genType(field.type) << " " << field.name << ";\n";
+        }
+        source << "};\n\n";
+    }
 
     for (const auto& function : program.functions) {
         source << "static " << genType(function.returnType) << " xihash_fn_" << function.name << "(";

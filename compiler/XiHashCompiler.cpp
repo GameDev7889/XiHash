@@ -1,6 +1,7 @@
 #include "XiHashCompiler.hpp"
 
 #include <cstdlib>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -58,6 +59,8 @@ void appendModule(Program& target, Program source) {
                                    source.openedNamespaces.end());
     target.functions.insert(target.functions.end(), std::make_move_iterator(source.functions.begin()),
                             std::make_move_iterator(source.functions.end()));
+    target.structs.insert(target.structs.end(), std::make_move_iterator(source.structs.begin()),
+                          std::make_move_iterator(source.structs.end()));
 }
 
 Program loadModule(const fs::path& path, const std::string& contents,
@@ -126,7 +129,8 @@ std::optional<int> XiHashCompiler::compile(const XiHashData& file, const Compile
             if (options.printStats) {
                 std::cerr << "optimizer: " << stats.foldedExpressions << " expressions folded, "
                           << stats.removedBranches << " branches removed, "
-                          << stats.removedStatements << " unreachable statements removed\n";
+                          << stats.removedStatements << " unreachable statements removed, "
+                          << stats.promotedAggregates << " struct aggregates promoted\n";
             }
         }
     } catch (const XiHashError& error) {
@@ -169,6 +173,11 @@ std::optional<int> XiHashCompiler::compile(const XiHashData& file, const Compile
     for (const auto& library : program.linkLibraries) {
         compileCommand << " -l" << library;
     }
+#ifdef XIHASH_MODULE_INCLUDE_DIR
+    if (std::find(program.cHeaders.begin(), program.cHeaders.end(), "XiHash/Numerals.hpp") != program.cHeaders.end()) {
+        compileCommand << " -I " << quoted(XIHASH_MODULE_INCLUDE_DIR);
+    }
+#endif
     if (runCommand(compileCommand.str()) != 0) {
         std::cerr << "error: the generated C++ failed to compile; this is a XiHash compiler bug. "
                      "Inspect the generated files in " << buildDir << '\n';

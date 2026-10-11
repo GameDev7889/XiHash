@@ -26,7 +26,9 @@ private:
     void parseUsingC(Program& program);
     void parseUsingLibrary(Program& program);
     void parseImport(Program& program);
+    void parseNamedImport(Program& program);
     void parseExternBlock(Program& program);
+    void parseStruct(Program& program);
     void parseTypeAlias();
     Type parseType();
     Type parseReturnType();
@@ -40,6 +42,7 @@ private:
     ExprPtr parseBinary(int level);
     ExprPtr parseUnary();
     ExprPtr parsePrimary();
+    ExprPtr parsePostfix(ExprPtr expression);
     std::vector<ExprPtr> parseArgs();
 
     std::vector<Token> tokens;

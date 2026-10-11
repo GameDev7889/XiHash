@@ -27,7 +27,7 @@ public:
 // A type is a base kind, or a pointer to another type. `isUnsafe` marks a raw pointer that must
 // be freed manually with `delete`; a pointer without it is a unique owner that frees automatically.
 struct Type {
-    enum Kind { Int, UInt, Float, UFloat, Double, UDouble, String, Bool, Char, Null, Pointer, Void };
+    enum Kind { Int, UInt, Float, UFloat, Double, UDouble, String, Bool, Char, Null, Pointer, Array, Vector, Struct, Void };
 
     Type(Kind kind = Void) : kind(kind) {}
 
@@ -35,12 +35,18 @@ struct Type {
     bool isUnsafe = false;
     std::shared_ptr<const Type> pointee;
     std::string cppTypeName;
+    std::size_t arraySize = 0; // zero denotes a dynamically sized heap array (std::vector)
+    std::size_t vectorSize = 0;
+    std::string structName;
 
     friend bool operator==(const Type& a, const Type& b) {
         if (a.kind != b.kind) {
             return false;
         }
         if (a.kind != Pointer) {
+            if (a.kind == Array) return a.arraySize == b.arraySize && *a.pointee == *b.pointee;
+            if (a.kind == Vector) return a.vectorSize == b.vectorSize && *a.pointee == *b.pointee;
+            if (a.kind == Struct) return a.structName == b.structName;
             return true;
         }
         return a.isUnsafe == b.isUnsafe && a.cppTypeName == b.cppTypeName && *a.pointee == *b.pointee;
@@ -51,6 +57,27 @@ inline Type makePointer(const Type& pointee, bool isUnsafe) {
     Type type(Type::Pointer);
     type.isUnsafe = isUnsafe;
     type.pointee = std::make_shared<const Type>(pointee);
+    return type;
+}
+
+inline Type makeArray(const Type& element, std::size_t size) {
+    Type type(Type::Array);
+    type.pointee = std::make_shared<const Type>(element);
+    type.arraySize = size;
+    return type;
+}
+
+inline Type makeVector(const Type& element, std::size_t size) {
+    Type type(Type::Vector);
+    type.pointee = std::make_shared<const Type>(element);
+    type.vectorSize = size;
+    return type;
+}
+
+inline Type makeStruct(std::string name) {
+    Type type(Type::Struct);
+    type.structName = std::move(name);
+    type.cppTypeName = type.structName;
     return type;
 }
 
@@ -67,6 +94,10 @@ inline std::string typeName(const Type& type) {
         case Type::Char: return "char";
         case Type::Null: return "null";
         case Type::Pointer: return (type.isUnsafe ? "unsafe " : "") + typeName(*type.pointee) + "*";
+        case Type::Array: return "Array<" + typeName(*type.pointee) +
+            (type.arraySize ? ", " + std::to_string(type.arraySize) : "") + ">";
+        case Type::Vector: return "Vector" + std::to_string(type.vectorSize) + "<" + typeName(*type.pointee) + ">";
+        case Type::Struct: return type.structName;
         case Type::Void: return "void";
     }
     return "?";
@@ -85,7 +116,7 @@ inline std::optional<Type> typeFromName(std::string_view name) {
 inline bool isNumeric(const Type& type) {
     switch (type.kind) {
         case Type::String: case Type::Bool: case Type::Char:
-        case Type::Null: case Type::Pointer: case Type::Void:
+        case Type::Null: case Type::Pointer: case Type::Array: case Type::Vector: case Type::Struct: case Type::Void:
             return false;
         default:
             return true;
@@ -101,7 +132,7 @@ inline bool isPointer(const Type& type) { return type.kind == Type::Pointer; }
 inline bool isSafePointer(const Type& type) { return type.kind == Type::Pointer && !type.isUnsafe; }
 
 enum class ExprKind { IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, CharLiteral, NullLiteral, Variable, Unary, Binary,
-                      New, Deref, AddressOf, Move, Call };
+                      New, Deref, AddressOf, Move, Call, ArrayLiteral, Index, Member, MethodCall };
 
 // `type` and `isConst` are filled in by the Analyzer. A constant expression is built only from
 // literals and may be implicitly converted to any compatible numeric type.
@@ -200,6 +231,38 @@ struct CallExpr : Expr {
     bool xiFunction = false;
 };
 
+struct ArrayLiteralExpr : Expr {
+    ArrayLiteralExpr(SourcePos pos, std::vector<ExprPtr> elements)
+        : Expr(ExprKind::ArrayLiteral, pos), elements(std::move(elements)) {}
+    std::vector<ExprPtr> elements;
+};
+
+struct IndexExpr : Expr {
+    IndexExpr(SourcePos pos, ExprPtr array, ExprPtr index)
+        : Expr(ExprKind::Index, pos), array(std::move(array)), index(std::move(index)) {}
+    ExprPtr array;
+    ExprPtr index;
+};
+
+struct MemberExpr : Expr {
+    MemberExpr(SourcePos pos, ExprPtr object, std::string member)
+        : Expr(ExprKind::Member, pos), object(std::move(object)), member(std::move(member)) {}
+    ExprPtr object;
+    std::string member;
+    std::vector<std::size_t> components;
+    bool writable = true;
+    Type memberType;
+};
+
+struct MethodCallExpr : Expr {
+    MethodCallExpr(SourcePos pos, ExprPtr object, std::string method, std::vector<ExprPtr> args)
+        : Expr(ExprKind::MethodCall, pos), object(std::move(object)), method(std::move(method)), args(std::move(args)) {}
+    ExprPtr object;
+    std::string method;
+    std::vector<ExprPtr> args;
+    std::string cppFunction;
+};
+
 enum class BinaryOp { Add, Sub, Mul, Div, Eq, Ne, Lt, Le, Gt, Ge, And, Or };
 
 inline const char* opSymbol(BinaryOp op) {
@@ -250,6 +313,9 @@ struct VarDeclStmt : Stmt {
     ExprPtr init;
     bool isConst;
     bool isStatic;
+    std::vector<ExprPtr> aggregateValues;
+    std::vector<Type> aggregateTypes;
+    bool aggregatePromoted = false;
 };
 
 struct AssignStmt : Stmt {
@@ -330,6 +396,17 @@ struct ExternBlock {
     std::vector<ExternFunction> functions;
 };
 
+struct StructField {
+    Type type;
+    std::string name;
+};
+
+struct StructDecl {
+    SourcePos pos;
+    std::string name;
+    std::vector<StructField> fields;
+};
+
 struct Program {
     std::vector<std::pair<std::string, SourcePos>> imports;
     std::vector<std::string> cHeaders;         // from `importC <header>;`
@@ -338,6 +415,7 @@ struct Program {
     std::vector<ExternBlock> externBlocks;     // from `extern name { ... }`
     std::vector<std::pair<std::string, SourcePos>> openedNamespaces; // from `using namespace name;`
     std::vector<Function> functions;
+    std::vector<StructDecl> structs;
 };
 
 #endif
