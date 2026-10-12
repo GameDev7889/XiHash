@@ -1,0 +1,1 @@
+std::cout << Hello from Echo Language! << std::endl;

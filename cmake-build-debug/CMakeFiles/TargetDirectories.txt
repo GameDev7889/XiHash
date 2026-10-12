@@ -1,0 +1,3 @@
+C:/Users/leich/CLionProjects/XiHash/cmake-build-debug/CMakeFiles/XiHash.dir
+C:/Users/leich/CLionProjects/XiHash/cmake-build-debug/CMakeFiles/edit_cache.dir
+C:/Users/leich/CLionProjects/XiHash/cmake-build-debug/CMakeFiles/rebuild_cache.dir

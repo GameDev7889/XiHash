@@ -1,0 +1,20 @@
+[
+{
+  "directory": "C:/Users/leich/CLionProjects/XiHash/cmake-build-debug",
+  "command": "\"C:\\PROGRA~1\\JetBrains\\CLion 2026.2.2\\bin\\mingw\\bin\\c++.exe\" -g -std=gnu++20 -fdiagnostics-color=always -fmodules-ts -fmodule-mapper=CMakeFiles\\XiHash.dir\\compilerManager.cpp.obj.modmap -MD -fdeps-format=p1689r5 -x c++ -o CMakeFiles\\XiHash.dir\\compilerManager.cpp.obj -c C:\\Users\\leich\\CLionProjects\\XiHash\\compilerManager.cpp",
+  "file": "C:/Users/leich/CLionProjects/XiHash/compilerManager.cpp",
+  "output": "C:/Users/leich/CLionProjects/XiHash/cmake-build-debug/CMakeFiles/XiHash.dir/compilerManager.cpp.obj"
+},
+{
+  "directory": "C:/Users/leich/CLionProjects/XiHash/cmake-build-debug",
+  "command": "\"C:\\PROGRA~1\\JetBrains\\CLion 2026.2.2\\bin\\mingw\\bin\\c++.exe\" -g -std=gnu++20 -fdiagnostics-color=always -fmodules-ts -fmodule-mapper=CMakeFiles\\XiHash.dir\\Parser.cpp.obj.modmap -MD -fdeps-format=p1689r5 -x c++ -o CMakeFiles\\XiHash.dir\\Parser.cpp.obj -c C:\\Users\\leich\\CLionProjects\\XiHash\\Parser.cpp",
+  "file": "C:/Users/leich/CLionProjects/XiHash/Parser.cpp",
+  "output": "C:/Users/leich/CLionProjects/XiHash/cmake-build-debug/CMakeFiles/XiHash.dir/Parser.cpp.obj"
+},
+{
+  "directory": "C:/Users/leich/CLionProjects/XiHash/cmake-build-debug",
+  "command": "\"C:\\PROGRA~1\\JetBrains\\CLion 2026.2.2\\bin\\mingw\\bin\\c++.exe\" -g -std=gnu++20 -fdiagnostics-color=always -fmodules-ts -fmodule-mapper=CMakeFiles\\XiHash.dir\\Compiler.cpp.obj.modmap -MD -fdeps-format=p1689r5 -x c++ -o CMakeFiles\\XiHash.dir\\Compiler.cpp.obj -c C:\\Users\\leich\\CLionProjects\\XiHash\\Compiler.cpp",
+  "file": "C:/Users/leich/CLionProjects/XiHash/Compiler.cpp",
+  "output": "C:/Users/leich/CLionProjects/XiHash/cmake-build-debug/CMakeFiles/XiHash.dir/Compiler.cpp.obj"
+}
+]
