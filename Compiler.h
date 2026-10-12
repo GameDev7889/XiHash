@@ -1,19 +1,10 @@
-//
-// Created by leich on 12.10.2026.
-//
-
 #ifndef XIHASH_COMPILER_H
 #define XIHASH_COMPILER_H
-#include <memory>
-#include <vector>
 
-#include "XiHashTypes/Namespaces.h"
+#include <string>
+#include <string_view>
 
+// Translate the supported XiHash source subset into a standalone C++ program.
+std::string compileToCpp(std::string_view source);
 
-class Compiler {
-public:
-    static void compile(const std::vector<std::unique_ptr<ASTNode>>& nodes);
-};
-
-
-#endif //XIHASH_COMPILER_H
+#endif // XIHASH_COMPILER_H

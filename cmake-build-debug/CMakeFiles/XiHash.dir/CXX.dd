@@ -1,7 +1,0 @@
-ninja_dyndep_version = 1.0
-build CMakeFiles/XiHash.dir/compilerManager.cpp.obj: dyndep
-
-build CMakeFiles/XiHash.dir/Parser.cpp.obj: dyndep
-
-build CMakeFiles/XiHash.dir/Compiler.cpp.obj: dyndep
-
